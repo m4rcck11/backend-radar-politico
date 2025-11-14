@@ -21,6 +21,8 @@ class Settings:
     )
     HTTP_TIMEOUT: int = 10
     HTTP_MAX_RETRIES: int = 2
+    SUPABASE_URL: str = os.getenv("SUPABASE_URL", "")
+    SUPABASE_SERVICE_KEY: str = os.getenv("SUPABASE_SERVICE_KEY", "")
 
 
 settings = Settings()

@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, EmailStr
 from typing import Optional, List
 
 
@@ -81,3 +81,17 @@ class PaginatedResponse(BaseModel):
     itens: int
     total: Optional[int] = None
 
+class UserCreate(BaseModel):
+    """ DTO para criação de usuário (signup) """
+    email: EmailStr
+    password: str
+
+class UserLogin(BaseModel):
+    """ DTO para login de usuário """
+    email: EmailStr
+    password: str
+
+class TokenResponse(BaseModel):
+    """ DTO para a resposta de login """
+    access_token: str
+    refresh_token: str
