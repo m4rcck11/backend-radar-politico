@@ -3,10 +3,14 @@ from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 from typing import Optional
-import logging
-
+from datetime import datetime, timedelta, timezone
+from app.services.deputado_repository import DeputadoRepository, get_deputado_repository
 from app.services.camara_api import get_camara_client, CamaraAPIClient
 from app.core.cache import lists_cache, aggregates_cache, get_cache_key
+import logging
+
+from app.services.deputado_repository import DeputadoRepository, get_deputado_repository
+from app.services.camara_api import get_camara_client, CamaraAPIClient
 from app.models.schemas import (
     DeputadoResponse,
     DeputadoDetalhadoResponse,
@@ -91,43 +95,71 @@ async def listar_deputados(
         logger.error(f"Erro ao buscar deputados: {e}")
         raise HTTPException(status_code=503, detail=str(e))
 
+CACHE_DURATION_HOURS = 24
 
 @router.get("/deputados/{deputado_id}", response_model=DeputadoDetalhadoResponse)
 async def obter_deputado(
     deputado_id: int,
-    client: CamaraAPIClient = Depends(get_camara_client)
+    client: CamaraAPIClient = Depends(get_camara_client),
+    repo: DeputadoRepository = Depends(get_deputado_repository)
 ):
-    cache_key = get_cache_key("deputado_detalhado", id=deputado_id)
     
-    if cache_key in lists_cache:
-        logger.info(f"Cache hit para {cache_key}")
-        cached_data = lists_cache[cache_key]
-        return DeputadoDetalhadoResponse(**cached_data)
+    # 1. TENTA BUSCAR NO BANCO DE DADOS (NOSSO CACHE PERSISTENTE)
+    deputado_db = await repo.get_deputado_by_id(deputado_id)
     
+    if deputado_db:
+        logger.info(f"Cache hit no DB para deputado {deputado_id}")
+        
+        # Verifica se o cache está "fresco"
+        last_fetched = datetime.fromisoformat(deputado_db['last_fetched_at'])
+        is_stale = (datetime.now(timezone.utc) - last_fetched) > timedelta(hours=CACHE_DURATION_HOURS)
+        
+        if not is_stale:
+            logger.info("Cache fresco. Retornando dados do DB.")
+            return DeputadoDetalhadoResponse(**deputado_db)
+        
+        logger.info("Cache vencido. Buscando na API...")
+
+    # 2. CACHE MISS (ou vencido): BUSCA NA API EXTERNA
     try:
-        deputado_data = await client.obter_deputado(deputado_id)
-        if not deputado_data:
+        logger.info(f"Cache miss para deputado {deputado_id}. Buscando na API.")
+        deputado_data_api = await client.obter_deputado(deputado_id)
+        if not deputado_data_api:
             raise HTTPException(status_code=404, detail="Deputado não encontrado")
         
-        result = {
-            "id": deputado_data.get("id"),
-            "nome": deputado_data.get("nome"),
-            "sigla_partido": deputado_data.get("siglaPartido"),
-            "sigla_uf": deputado_data.get("siglaUf"),
-            "url_foto": deputado_data.get("urlFoto"),
-            "email": deputado_data.get("email"),
-            "data_nascimento": deputado_data.get("dataNascimento"),
-            "escolaridade": deputado_data.get("escolaridade"),
-            "municipio_nascimento": deputado_data.get("municipioNascimento"),
-            "uf_nascimento": deputado_data.get("ufNascimento")
-        }
+       # 3. MAPEIA E SALVA NO BANCO
+        # Pega os objetos aninhados de forma segura
+        status = deputado_data_api.get("ultimoStatus", {})
+        gabinete = status.get("gabinete", {})
+
+        deputado_para_salvar = {
+            # Campos do nível superior
+            "id": deputado_data_api.get("id"),
+            "data_nascimento": deputado_data_api.get("dataNascimento"),
+            "escolaridade": deputado_data_api.get("escolaridade"),
+            "municipio_nascimento": deputado_data_api.get("municipioNascimento"),
+             "uf_nascimento": deputado_data_api.get("ufNascimento"),
+
+            # Campos aninhados em 'ultimoStatus'
+            "nome": status.get("nome"),
+            "sigla_partido": status.get("siglaPartido"),
+            "sigla_uf": status.get("siglaUf"),
+            "url_foto": status.get("urlFoto"),
+
+            # Campo aninhado em 'ultimoStatus.gabinete'
+             "email": gabinete.get("email"),
+
+            # Nosso timestamp
+             "last_fetched_at": datetime.now(timezone.utc).isoformat()
+ }
         
-        lists_cache[cache_key] = result
+        await repo.save_deputado(deputado_para_salvar)
         
-        return DeputadoDetalhadoResponse(**result)
+        # 4. RETORNA A RESPOSTA
+        return DeputadoDetalhadoResponse(**deputado_para_salvar)
         
     except CamaraAPIError as e:
-        logger.error(f"Erro ao buscar deputado: {e}")
+        logger.error(f"Erro ao buscar deputado na API: {e}")
         raise HTTPException(status_code=503, detail=str(e))
     except HTTPException:
         raise
@@ -150,6 +182,7 @@ async def obter_despesas_deputado(
         return DespesasDeputadoResponse(**cached_data)
     
     try:
+        # Precisamos dos dados do deputado para pegar o nome
         deputado_data = await client.obter_deputado(deputado_id)
         if not deputado_data:
             raise HTTPException(status_code=404, detail="Deputado não encontrado")
@@ -162,6 +195,7 @@ async def obter_despesas_deputado(
             for d in despesas
         )
         
+        # O import do DespesaResponse estava dentro da função no seu código original
         from app.models.schemas import DespesaResponse
         despesas_normalizadas = [
             DespesaResponse(

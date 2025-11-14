@@ -15,6 +15,7 @@ from app.core.errors import (
 )
 from app.routes.deputados import router as deputados_router, set_limiter
 from app.services.camara_api import get_camara_client
+from app.routes.auth import router as auth_router
 
 logging.basicConfig(
     level=logging.INFO,
@@ -46,7 +47,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["*"],    
     allow_headers=["*"],
 )
 
@@ -55,6 +56,7 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 app.add_exception_handler(CamaraAPIError, camara_api_exception_handler)
 app.add_exception_handler(Exception, general_exception_handler)
 app.include_router(deputados_router)
+app.include_router(auth_router)
 
 
 @app.get("/")
