@@ -8,3 +8,5 @@ pydantic
 python-dotenv==1.0.0
 pytest==7.4.4
 pytest-asyncio==0.23.3
+pydantic[email]
+supabase
